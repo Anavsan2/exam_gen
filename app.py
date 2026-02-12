@@ -14,7 +14,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.prompts import ChatPromptTemplate
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(
