@@ -1,0 +1,16 @@
+# Interfaz de usuario
+streamlit
+
+# Framework de LLMs y RAG
+langchain
+langchain-groq
+langchain_community
+langchain_huggingface
+
+# Procesamiento de documentos y texto
+PyMuPDF
+sentence-transformers
+
+# Base de datos vectorial y utilidades
+faiss-cpu
+pydantic
