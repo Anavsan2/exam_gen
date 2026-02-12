@@ -7,14 +7,15 @@ from pathlib import Path
 from pdf2image import convert_from_path
 from PIL import Image
 
-# LangChain & AI
+# --- IMPORTACIONES CORREGIDAS ---
 from langchain_groq import ChatGroq
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.documents import Document
+# ✅ ESTA ES LA LÍNEA QUE DABA ERROR (SOLUCIONADA):
+from langchain_core.documents import Document 
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(
@@ -54,7 +55,7 @@ def perform_ocr(pdf_path):
         progress_bar.empty()
         return text
     except Exception as e:
-        st.error(f"Error en OCR: {e}. Asegúrate de tener instalado 'poppler-utils' y 'tesseract-ocr'.")
+        st.error(f"Error en OCR: {e}. Asegúrate de tener instalado 'poppler-utils' y 'tesseract-ocr' en packages.txt.")
         return ""
 
 def process_document(uploaded_file):
@@ -102,7 +103,6 @@ with st.sidebar:
     
     uploaded_file = st.file_uploader("Sube tu material (PDF)", type="pdf")
     
-    # --- AQUÍ ESTÁ EL CAMBIO PRINCIPAL ---
     st.subheader("Parámetros del Examen")
     
     # Input numérico para elegir la cantidad exacta
@@ -199,7 +199,7 @@ if generate_btn:
                     
                     # Guardar estado
                     st.session_state.quiz_data = quiz_data
-                    # Reiniciar diccionario de respuestas del usuario
+                    # Reiniciar respuestas del usuario
                     st.session_state.user_answers = {} 
                     st.session_state.quiz_submitted = False
                     
@@ -255,8 +255,9 @@ if "quiz_data" in st.session_state and st.session_state.quiz_data:
                 
                 st.info(f"💡 Explicación: {q['explanation']}")
 
-        score = (correct_count / len(st.session_state.quiz_data)) * 100
-        st.metric(label="Calificación Final", value=f"{score:.0f}/100")
-        
-        if score == 100:
-            st.balloons()
+        if len(st.session_state.quiz_data) > 0:
+            score = (correct_count / len(st.session_state.quiz_data)) * 100
+            st.metric(label="Calificación Final", value=f"{score:.0f}/100")
+            
+            if score == 100:
+                st.balloons()
