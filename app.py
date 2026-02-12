@@ -18,17 +18,17 @@ from langchain.docstore.document import Document
 
 # --- CONFIGURACIÓN DE LA PÁGINA ---
 st.set_page_config(
-    page_title="Generador de Exámenes con IA (RAG + OCR)",
-    page_icon="🎓",
+    page_title="Generador de Exámenes con IA",
+    page_icon="📝",
     layout="centered"
 )
 
-st.title("🎓 Generador de Exámenes Inteligente")
+st.title("📝 Generador de Exámenes a Medida")
 st.markdown("""
-Sube un PDF (texto o escaneado) y la IA generará un examen tipo test basado en su contenido.
+Sube tus apuntes o libros (PDF) y elige cuántas preguntas quieres para practicar.
 """)
 
-# --- FUNCIONES AUXILIARES ---
+# --- FUNCIONES AUXILIARES (OCR y Limpieza) ---
 
 def clean_json_string(json_str):
     """Limpia la respuesta del LLM para asegurar que es un JSON válido."""
@@ -60,32 +60,28 @@ def perform_ocr(pdf_path):
 def process_document(uploaded_file):
     """Procesa el PDF, extrae texto (normal u OCR) y crea el VectorStore."""
     
-    # Crear archivo temporal
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
         tmp_file.write(uploaded_file.getvalue())
         tmp_path = tmp_file.name
 
     try:
-        # 1. Intentar extracción de texto nativo
         loader = PyMuPDFLoader(tmp_path)
         docs = loader.load()
         text_content = "\n".join([doc.page_content for doc in docs])
 
-        # 2. Si hay muy poco texto, asumir que es escaneado y usar OCR
+        # Detectar si es escaneado (poco texto)
         if len(text_content.strip()) < 50:
             extracted_text = perform_ocr(tmp_path)
             if not extracted_text.strip():
                 return None, "No se pudo extraer texto ni con OCR."
             docs = [Document(page_content=extracted_text, metadata={"source": uploaded_file.name})]
 
-        # 3. Dividir texto en chunks (fragmentos)
         text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
         chunks = text_splitter.split_documents(docs)
 
         if not chunks:
             return None, "El documento está vacío después del procesamiento."
 
-        # 4. Crear Embeddings y Vector Store
         embeddings = HuggingFaceEmbeddings(model_name="BAAI/bge-large-en-v1.5")
         vectorstore = FAISS.from_documents(chunks, embeddings)
         
@@ -94,37 +90,55 @@ def process_document(uploaded_file):
     except Exception as e:
         return None, str(e)
     finally:
-        # Limpieza
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
 
-# --- SIDEBAR ---
+# --- BARRA LATERAL (CONFIGURACIÓN) ---
 with st.sidebar:
     st.header("⚙️ Configuración")
     api_key = st.text_input("Groq API Key", type="password")
     
-    st.write("---")
+    st.divider()
+    
     uploaded_file = st.file_uploader("Sube tu material (PDF)", type="pdf")
-    num_questions = st.slider("Número de preguntas", 1, 10, 3)
+    
+    # --- AQUÍ ESTÁ EL CAMBIO PRINCIPAL ---
+    st.subheader("Parámetros del Examen")
+    
+    # Input numérico para elegir la cantidad exacta
+    num_questions = st.number_input(
+        "Número de preguntas:", 
+        min_value=1, 
+        max_value=20, 
+        value=5, 
+        step=1,
+        help="Elige cuántas preguntas quieres generar (máx 20 por bloque)."
+    )
+    
     level = st.selectbox("Nivel de dificultad", ["Fácil", "Intermedio", "Difícil"])
     
     generate_btn = st.button("Generar Examen", type="primary")
 
-# --- PROMPT DEL SISTEMA ---
+# --- PROMPT REFORZADO ---
 QUIZ_SYSTEM_PROMPT = """
-You are an expert teacher creating a quiz based ONLY on the provided context.
-Difficulty Level: {level}
-Number of Questions: {num_questions}
+You are an expert teacher creating a multiple-choice quiz based ONLY on the provided context.
 
-Output Requirements:
-1. Return ONLY a JSON list of objects. Do not include markdown formatting or conversational text.
-2. Each object must strictly follow this schema:
+STRICT REQUIREMENTS:
+1. Difficulty Level: {level}
+2. **Quantity: Generate EXACTLY {num_questions} questions.** Do not generate fewer or more.
+3. Language: Spanish (Respond in Spanish).
+
+OUTPUT FORMAT (JSON ONLY):
+Return a raw JSON list of objects. No markdown, no explanations outside the JSON.
+Schema:
+[
    {{
-       "question": "Question text here",
-       "options": ["Option A", "Option B", "Option C", "Option D"],
-       "answer": 0,  // Index of the correct option (0-3)
-       "explanation": "Brief explanation of why this is correct."
+       "question": "Texto de la pregunta",
+       "options": ["Opción A", "Opción B", "Opción C", "Opción D"],
+       "answer": 0,  // Índice de la respuesta correcta (0-3)
+       "explanation": "Breve explicación de por qué es correcta según el texto."
    }}
+]
 """
 
 # --- LÓGICA PRINCIPAL ---
@@ -137,34 +151,35 @@ if generate_btn:
     else:
         os.environ["GROQ_API_KEY"] = api_key
         
-        # 1. Procesamiento (solo si no se ha hecho ya para este archivo)
+        # 1. Procesar documento (solo si es nuevo)
         if "vectorstore" not in st.session_state or st.session_state.get("current_file") != uploaded_file.name:
-            with st.spinner("🔍 Analizando documento e indexando..."):
+            with st.spinner("🔍 Procesando documento..."):
                 vectorstore, error = process_document(uploaded_file)
-                
                 if error:
                     st.error(f"Error: {error}")
                 else:
                     st.session_state.vectorstore = vectorstore
                     st.session_state.current_file = uploaded_file.name
-                    st.success("Documento procesado correctamente.")
 
-        # 2. Generación del Quiz
+        # 2. Generar Preguntas
         if "vectorstore" in st.session_state:
-            with st.spinner("🤖 La IA está redactando las preguntas..."):
+            with st.spinner(f"🤖 Generando {num_questions} preguntas de nivel {level}..."):
                 try:
-                    # Recuperar contexto relevante (Retrieve)
-                    # Buscamos conceptos generales para tener una visión amplia
-                    retriever = st.session_state.vectorstore.as_retriever(search_kwargs={"k": 5})
-                    docs = retriever.invoke("summary of key concepts main topics definitions")
+                    # Recuperamos más contexto si se piden muchas preguntas
+                    # k = número de preguntas * 1.5 (para asegurar suficiente info)
+                    k_retrieval = max(5, int(num_questions * 1.5))
+                    retriever = st.session_state.vectorstore.as_retriever(search_kwargs={"k": k_retrieval})
+                    
+                    # Recuperar contexto
+                    docs = retriever.invoke("conceptos clave definiciones importantes resumen del tema")
                     context_text = "\n\n".join([d.page_content for d in docs])
 
-                    # Generar con LLM (Generate)
+                    # Llamar al LLM
                     llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.5)
                     
                     prompt = ChatPromptTemplate.from_messages([
                         ("system", QUIZ_SYSTEM_PROMPT),
-                        ("human", "Context: {context}")
+                        ("human", "Contexto: {context}")
                     ])
                     
                     chain = prompt | llm
@@ -174,68 +189,74 @@ if generate_btn:
                         "num_questions": num_questions
                     })
                     
-                    # Limpieza y Parseo del JSON
+                    # Procesar JSON
                     json_content = clean_json_string(response.content)
                     quiz_data = json.loads(json_content)
                     
-                    # Guardar en sesión
+                    # Validar cantidad (informativo)
+                    if len(quiz_data) != num_questions:
+                        st.warning(f"Nota: Se solicitaron {num_questions} preguntas, pero la IA generó {len(quiz_data)}.")
+                    
+                    # Guardar estado
                     st.session_state.quiz_data = quiz_data
-                    # Reiniciar respuestas del usuario
-                    st.session_state.user_answers = [None] * len(quiz_data)
+                    # Reiniciar diccionario de respuestas del usuario
+                    st.session_state.user_answers = {} 
+                    st.session_state.quiz_submitted = False
                     
                 except Exception as e:
-                    st.error(f"Ocurrió un error generando el examen: {e}")
+                    st.error(f"Error generando el examen: {e}")
 
 # --- MOSTRAR EXAMEN ---
-if "quiz_data" in st.session_state:
+if "quiz_data" in st.session_state and st.session_state.quiz_data:
     st.write("---")
-    st.subheader(f"📝 Examen: {uploaded_file.name}")
+    st.subheader(f"📝 Examen ({len(st.session_state.quiz_data)} preguntas)")
     
-    score = 0
-    all_answered = True
-    
-    # Crear formulario para evitar recargas constantes
     with st.form("quiz_form"):
         for i, q in enumerate(st.session_state.quiz_data):
-            st.markdown(f"**{i+1}. {q['question']}**")
+            st.markdown(f"#### {i+1}. {q['question']}")
             
-            # Radio buttons para las opciones
-            # Usamos un key único para mantener el estado
+            # Recuperar respuesta previa si existe
+            current_choice = st.session_state.user_answers.get(i, None)
+            
             choice = st.radio(
-                "Selecciona una opción:", 
+                "Elige una opción:", 
                 q['options'], 
-                key=f"q_{i}", 
-                index=None,
+                key=f"radio_{i}", 
+                index=None if current_choice is None else q['options'].index(current_choice) if current_choice in q['options'] else None,
                 label_visibility="collapsed"
             )
+            st.write("") 
             
-            st.write("") # Espacio
-            
-        submit = st.form_submit_button("Verificar Resultados")
+        submit = st.form_submit_button("Corregir Examen")
+        
+        if submit:
+            st.session_state.quiz_submitted = True
+            # Guardar las respuestas actuales del form en el estado
+            for i in range(len(st.session_state.quiz_data)):
+                st.session_state.user_answers[i] = st.session_state[f"radio_{i}"]
 
-    # Lógica de corrección (fuera del form para mostrar resultados)
-    if submit:
+    # --- RESULTADOS ---
+    if st.session_state.get("quiz_submitted", False):
         st.write("---")
         st.subheader("Resultados")
         
         correct_count = 0
         for i, q in enumerate(st.session_state.quiz_data):
-            user_choice = st.session_state.get(f"q_{i}")
+            user_choice = st.session_state.user_answers.get(i)
             correct_option = q['options'][q['answer']]
             
-            if user_choice == correct_option:
-                correct_count += 1
-                st.success(f"✅ Pregunta {i+1}: Correcta")
-            else:
-                st.error(f"❌ Pregunta {i+1}: Incorrecta")
-                st.markdown(f"**Tu respuesta:** {user_choice}")
-                st.markdown(f"**Respuesta correcta:** {correct_option}")
-                st.info(f"ℹ️ **Explicación:** {q['explanation']}")
-            st.write("---")
+            with st.expander(f"Pregunta {i+1}: {'✅ Correcta' if user_choice == correct_option else '❌ Incorrecta'}", expanded=True):
+                if user_choice == correct_option:
+                    correct_count += 1
+                    st.success(f"¡Bien hecho! La respuesta es: {correct_option}")
+                else:
+                    st.error(f"Tu respuesta: {user_choice}")
+                    st.success(f"Respuesta correcta: {correct_option}")
+                
+                st.info(f"💡 Explicación: {q['explanation']}")
 
-        score_pct = (correct_count / len(st.session_state.quiz_data)) * 100
-        if score_pct >= 70:
+        score = (correct_count / len(st.session_state.quiz_data)) * 100
+        st.metric(label="Calificación Final", value=f"{score:.0f}/100")
+        
+        if score == 100:
             st.balloons()
-            st.success(f"🎉 ¡Felicidades! Puntuación final: {score_pct:.1f}% ({correct_count}/{len(st.session_state.quiz_data)})")
-        else:
-            st.warning(f"📚 A seguir estudiando. Puntuación final: {score_pct:.1f}% ({correct_count}/{len(st.session_state.quiz_data)})")
