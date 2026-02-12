@@ -14,3 +14,7 @@ sentence-transformers
 # Base de datos vectorial y utilidades
 faiss-cpu
 pydantic
+
+pdf2image
+pytesseract
+pillow
