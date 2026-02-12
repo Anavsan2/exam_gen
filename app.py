@@ -41,22 +41,51 @@ def clean_json_string(json_str):
     return json_str
 
 def perform_ocr(pdf_path):
-    """Realiza OCR en un PDF escaneado."""
-    st.info("⚠️ Detectando imágenes... Aplicando OCR (esto puede tardar unos segundos).")
-    try:
-        images = convert_from_path(pdf_path)
-        text = ""
-        progress_bar = st.progress(0)
+    """Realiza OCR por lotes para no saturar la memoria RAM."""
+    st.info("⚠️ Documento escaneado detectado. Procesando por partes (esto tomará tiempo)...")
+    text = ""
+    
+    # Configuración de seguridad
+    batch_size = 5   # Procesar de 5 en 5 páginas
+    max_pages = 20   # Límite máximo para evitar timeouts en la versión gratuita
+    
+    current_page = 1
+    progress_bar = st.progress(0)
+    
+    while current_page <= max_pages:
+        try:
+            # Cargar solo un subconjunto de páginas
+            images = convert_from_path(
+                pdf_path, 
+                first_page=current_page, 
+                last_page=min(current_page + batch_size - 1, max_pages)
+            )
+            
+            if not images:
+                break # Fin del documento
+            
+            # Extraer texto de este lote
+            for img in images:
+                text += pytesseract.image_to_string(img) + "\n"
+                
+            # Actualizar barra de progreso
+            progress_val = min(current_page / max_pages, 1.0)
+            progress_bar.progress(progress_val)
+            
+            # Avanzar y limpiar memoria
+            current_page += batch_size
+            del images # Forzar liberación de memoria
+            
+        except Exception as e:
+            st.warning(f"Aviso: Se detuvo el OCR en la página {current_page} ({e})")
+            break
+            
+    progress_bar.empty()
+    
+    if current_page > max_pages:
+        st.warning(f"⚠️ Nota: Por límites de memoria y tiempo, solo se procesaron las primeras {max_pages} páginas del documento.")
         
-        for i, image in enumerate(images):
-            text += pytesseract.image_to_string(image) + "\n"
-            progress_bar.progress((i + 1) / len(images))
-        
-        progress_bar.empty()
-        return text
-    except Exception as e:
-        st.error(f"Error en OCR: {e}. Asegúrate de tener instalado 'poppler-utils' y 'tesseract-ocr' en packages.txt.")
-        return ""
+    return text
 
 def process_document(uploaded_file):
     """Procesa el PDF, extrae texto (normal u OCR) y crea el VectorStore."""
